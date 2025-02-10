@@ -486,7 +486,7 @@ const ChatUI = () => {
 
                 {message.role === "assistant" && !message.isPricing && (
                   <div className="flex items-center gap-2 mt-2">
-                    <Tooltip>
+                    {/* <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
                           variant="ghost"
@@ -526,7 +526,7 @@ const ChatUI = () => {
                       <TooltipContent>
                         <p>Bad response</p>
                       </TooltipContent>
-                    </Tooltip>
+                    </Tooltip> */}
 
                     <Tooltip>
                       <TooltipTrigger asChild>

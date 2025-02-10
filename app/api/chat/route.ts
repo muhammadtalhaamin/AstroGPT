@@ -1,27 +1,26 @@
 import { NextResponse } from "next/server";
-import { ChatOpenAI } from "@langchain/openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { TextLoader } from "langchain/document_loaders/fs/text";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { CSVLoader } from "@langchain/community/document_loaders/fs/csv";
-import { Document } from "@langchain/core/documents";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { BufferMemory } from "langchain/memory";
-import { ConversationChain } from "langchain/chains";
-import { ChatMessageHistory } from "@langchain/community/stores/message/in_memory";
 
-const chatSessions = new Map<string, ChatMessageHistory>();
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+});
+
+// Astrology-related keywords to validate queries
+const ASTRO_KEYWORDS = [
+  "astrology", "horoscope", "zodiac", "birth chart", "natal chart",
+  "planets", "stars", "numerology", "saturn return", "retrograde",
+  "sun sign", "moon sign", "rising sign", "houses", "aspects",
+  "transit", "progression", "conjunction", "opposition", "trine",
+];
 
 // AstroGPT system prompt
 const ASTROGPT_PROMPT = `
-## OBJECTIVE
 You are AstroGPT, an AI that provides personalized astrological and numerological insights in an elegant, professional format.
 
-## CORE IDENTITY
-- Voice: Mystical yet professional, like a modern spiritual guide
-- Style: Elegant, clear, and engaging with beautiful formatting
-
-## RESPONSE FORMAT
-Always structure your responses in this format:
+Your responses must follow this exact structure:
 
 # ✨ [Title of Reading]
 
@@ -40,38 +39,20 @@ Always structure your responses in this format:
 ---
 *[Optional: Any follow-up questions or missing information requests]*
 
-## FORMATTING RULES
-1. Use markdown headers (#, ##) for clear section breaks
-2. Write in flowing paragraphs instead of bullet points
-3. Use emojis sparingly and strategically
-4. Avoid using "Current Step" or similar mechanical phrases
-5. Incorporate tasks naturally into the narrative
+Guidelines:
+1. Always maintain a mystical yet professional tone
+2. Use markdown formatting for clear section breaks
+3. Write in flowing paragraphs instead of bullet points
+4. Use emojis sparingly and strategically
+5. Incorporate practical guidance naturally into the narrative
 6. Use italics and bold for emphasis, not for section markers
-
-## EXAMPLE RESPONSE:
-
-# ✨ Your Aries Solar Journey
-
-## 🌟 Celestial Overview
-The cosmic winds blow with particular strength through your Aries spirit, dear seeker. As the fires of the first zodiac sign illuminate your path, Mars dances in harmony with your inherent drive for discovery and achievement.
-
-## 🔮 Your Cosmic Blueprint
-Your Aries Sun bestows upon you the gift of initiation and leadership. Like the first warm rays of spring sunshine, your energy brightens the world around you. This placement suggests a natural ability to pioneer new paths and inspire others through your actions.
-
-## 📊 Numerological Resonance
-Your Life Path Number 4 weaves a fascinating counterpoint to your fiery Aries nature. While your sun sign drives you to explore and initiate, your numerological foundation provides the structure and stability needed to manifest your visions into reality.
-
-## 🌠 Guidance & Action Steps
-The current celestial alignment suggests focusing on creative projects that combine your innovative spirit with your methodical approach. Consider starting that passion project you've been contemplating, but approach it with your natural systematic style.
-
----
-*To provide an even deeper reading, I would be honored to know your birth time and location. This will allow me to map your complete astrological blueprint.*
-
-## CONTEXT MAINTENANCE
-- Chat History: {chat_history}
-- Latest Query: {query}
-- Retrieved Information: {results}
 `;
+
+// Function to validate if the query is astrology-related
+function isAstroQuery(message: string): boolean {
+  const lowercaseMessage = message.toLowerCase();
+  return ASTRO_KEYWORDS.some(keyword => lowercaseMessage.includes(keyword));
+}
 
 export async function POST(req: Request) {
   try {
@@ -80,39 +61,40 @@ export async function POST(req: Request) {
     const sessionId = formData.get("sessionId") as string;
     const files = formData.getAll("files") as File[];
 
-    if (!chatSessions.has(sessionId)) {
-      chatSessions.set(sessionId, new ChatMessageHistory());
+    // Validate if the query is astrology-related
+    if (!isAstroQuery(message)) {
+      return new Response(
+        `data: ${JSON.stringify({
+          content: "I can only assist with astrological and numerological readings. Please ask me about your cosmic journey!"
+        })}\n\ndata: ${JSON.stringify({ content: "[DONE]" })}\n\n`,
+        {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        }
+      );
     }
-    const chatHistory = chatSessions.get(sessionId)!;
-
-    const memory = new BufferMemory({
-      chatHistory: chatHistory,
-      returnMessages: true,
-      memoryKey: "history",
-    });
 
     // Process files and extract content
     let fileContents = "";
-
     if (files && files.length > 0) {
       for (const file of files) {
         const buffer = await file.arrayBuffer();
         const fileName = file.name.toLowerCase();
-
         try {
           let content = "";
           if (fileName.endsWith(".txt")) {
             const text = new TextDecoder().decode(buffer);
-            content = `Content from ${fileName}:\n${text}\n\n`;
+            content = `Astrological Information from ${fileName}:\n${text}\n\n`;
           } else if (fileName.endsWith(".pdf")) {
             const loader = new PDFLoader(
               new Blob([buffer], { type: "application/pdf" }),
-              {
-                splitPages: false,
-              }
+              { splitPages: false }
             );
             const docs = await loader.load();
-            content = `Content from ${fileName}:\n${docs
+            content = `Astrological Information from ${fileName}:\n${docs
               .map((doc) => doc.pageContent)
               .join("\n")}\n\n`;
           } else if (fileName.endsWith(".csv")) {
@@ -121,7 +103,7 @@ export async function POST(req: Request) {
               new Blob([text], { type: "text/csv" })
             );
             const docs = await loader.load();
-            content = `Content from ${fileName}:\n${docs
+            content = `Astrological Information from ${fileName}:\n${docs
               .map((doc) => doc.pageContent)
               .join("\n")}\n\n`;
           }
@@ -133,55 +115,39 @@ export async function POST(req: Request) {
       }
     }
 
-    // Construct the full message with system prompt
-    const fullMessage = `${ASTROGPT_PROMPT}\n\nUser Question: ${message}\n\n${fileContents}\n\nPlease analyze the above content and respond to the user's question according to the AstroGPT guidelines.`;
-
-    // Initialize chat model
-    const model = new ChatOpenAI({
-      modelName: "gpt-4",
-      streaming: true,
+    const response = await anthropic.messages.create({
+      model: "claude-3-5-sonnet-20241022",
+      max_tokens: 4096,
       temperature: 0.7,
+      stream: true,
+      system: ASTROGPT_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `${message}\n\n${fileContents}`,
+        },
+      ],
     });
 
-    // Create conversation chain
-    const chain = new ConversationChain({
-      llm: model,
-      memory: memory,
-    });
-
-    // Create readable stream for response
-    const readableStream = new ReadableStream({
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
       async start(controller) {
         try {
-          const response = await chain.call(
-            { input: fullMessage },
-            {
-              callbacks: [
-                {
-                  handleLLMNewToken(token: string) {
-                    const data = JSON.stringify({ content: token });
-                    controller.enqueue(`data: ${data}\n\n`);
-                  },
-                },
-              ],
+          for await (const chunk of response) {
+            if (chunk.type === 'content_block_delta' && 'text' in chunk.delta) {
+              const data = JSON.stringify({ content: chunk.delta.text });
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
             }
-          );
-
-          await chatHistory.addMessage(new HumanMessage(fullMessage));
-          await chatHistory.addMessage(new AIMessage(response.response));
-
-          controller.enqueue(
-            `data: ${JSON.stringify({ content: "[DONE]" })}\n\n`
-          );
+          }
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "[DONE]" })}\n\n`));
           controller.close();
         } catch (error) {
-          console.error("Streaming error:", error);
           controller.error(error);
         }
       },
     });
 
-    return new Response(readableStream, {
+    return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
